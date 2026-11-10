@@ -949,6 +949,77 @@ class Store:
         return cur.rowcount or 0
 
     # ------------------------------------------------------------------ #
+    # 模型（提供商）引用的一致性：AstrBot 删除 / 禁用模型后的悬空引用
+    # ------------------------------------------------------------------ #
+    async def model_ref_rows(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """取出所有引用了模型 id 的持久化行：``(等级全表, 专属模型 policy 行)``。
+
+        只给 ``provider_refs.collect_refs`` 当输入；**不碰** ``usage_log`` /
+        ``audit_log`` —— 历史用量与审计里的旧 id 是账目，模型删了也要留着对账。
+        """
+        async with self._conn().execute("SELECT * FROM quota_level") as cur:
+            levels = [dict(r) for r in await cur.fetchall()]
+        marks = ", ".join("?" for _ in PROVIDER_FEATURES)
+        async with self._conn().execute(
+            "SELECT scope_type, scope_id, feature, scene, effect FROM policy "
+            f"WHERE feature IN ({marks})",
+            list(PROVIDER_FEATURES),
+        ) as cur:
+            policies = [dict(r) for r in await cur.fetchall()]
+        return levels, policies
+
+    async def prune_provider_refs(self, ids: Any) -> dict[str, int]:
+        """**用户主动触发**的定向清理：把指定模型 id 从持久化配置里摘掉。
+
+        只清用户勾选的 ``ids``，绝不「顺手清所有当前不可用的」——禁用是可逆的、
+        加载是有时序的，全量自动清理会抹掉用户配好的等级路由。
+
+        - 等级主 / 备模型：命中的字段清空（等于回落 AstrBot 默认模型）；
+        - 等级可切换名单：从 JSON 里剔除命中的 id，其余保持顺序；
+        - ``policy`` 里 ``feature in (model, model_choice)`` 且 effect 命中：整行删除
+          （等于该对象恢复「跟随等级 / 系统默认」）；
+        - 用量、审计、成员缓存一律不动。
+
+        Returns: ``{levels, level_fields, switch_removed, policies}`` 各项清理计数。
+        """
+        wanted = {str(p or "").strip() for p in (ids or ()) if str(p or "").strip()}
+        stats = {"levels": 0, "level_fields": 0, "switch_removed": 0, "policies": 0}
+        if not wanted:
+            return stats
+        db = self._conn()
+
+        levels, _ = await self.model_ref_rows()
+        for lv in levels:
+            changed: dict[str, Any] = {}
+            for field in ("provider_id", "fallback_provider_id"):
+                if str(lv.get(field) or "").strip() in wanted:
+                    changed[field] = ""
+                    stats["level_fields"] += 1
+            old_list = parse_provider_list(lv.get("switch_providers"))
+            new_list = [p for p in old_list if p not in wanted]
+            if len(new_list) != len(old_list):
+                changed["switch_providers"] = dump_provider_list(new_list)
+                stats["switch_removed"] += len(old_list) - len(new_list)
+            if not changed:
+                continue
+            sets = ", ".join(f"{k} = ?" for k in changed)
+            await db.execute(
+                f"UPDATE quota_level SET {sets}, updated_at = ? WHERE id = ?",
+                [*changed.values(), now_ts(), int(lv["id"])],
+            )
+            stats["levels"] += 1
+
+        marks = ", ".join("?" for _ in wanted)
+        feat_marks = ", ".join("?" for _ in PROVIDER_FEATURES)
+        cur = await db.execute(
+            f"DELETE FROM policy WHERE feature IN ({feat_marks}) AND effect IN ({marks})",
+            [*PROVIDER_FEATURES, *sorted(wanted)],
+        )
+        stats["policies"] = cur.rowcount or 0
+        await db.commit()
+        return stats
+
+    # ------------------------------------------------------------------ #
     # 额度
     # ------------------------------------------------------------------ #
     async def get_quota(self, scope_type: str, scope_id: str, period: str) -> Optional[dict[str, Any]]:

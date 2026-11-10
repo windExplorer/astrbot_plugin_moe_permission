@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover - 仅本地静态检查时缺失
 
 try:  # 与 main.py 同样的双形态导入（包内正常加载 / 平铺调试）
     from . import model_card
+    from . import provider_refs as provider_refs_mod
     from .gate import effect_in_scene
     from .store import MODEL_CHOICE_FEATURE, MODEL_FEATURE
     from .store import SCHEMA_VERSION as STORE_SCHEMA_VERSION
@@ -43,6 +44,7 @@ try:  # 与 main.py 同样的双形态导入（包内正常加载 / 平铺调试
     from .sync import sync_group_members
 except ImportError:  # pragma: no cover - 本地平铺调试
     import model_card  # type: ignore
+    import provider_refs as provider_refs_mod  # type: ignore
     from gate import effect_in_scene  # type: ignore
     from store import MODEL_CHOICE_FEATURE, MODEL_FEATURE  # type: ignore
     from store import SCHEMA_VERSION as STORE_SCHEMA_VERSION  # type: ignore
@@ -1255,6 +1257,12 @@ async def h_import_rules(plugin) -> dict:
     )
     # 导入后立刻重建内存规则，让闸门用上新配置
     await plugin.reload_rules()
+    # 备份可能是从另一台机器带来的，里面的模型 id 未必在本机存在。
+    # 刻意**不在导入时过滤**（跨机器恢复时静默丢配置更糟），只把失效引用报告出来，
+    # 让用户去「模型引用」区自行决定是否清理。
+    report = await _stale_report(plugin)
+    stats["stale_models"] = report.get("stale") or []
+    stats["stale_total"] = int(report.get("total") or 0)
     return ok(stats)
 
 
@@ -1272,18 +1280,35 @@ async def h_audit(plugin) -> dict:
 # ---------------------------------------------------------------------- #
 # 等级 / 归级
 # ---------------------------------------------------------------------- #
+async def _stale_report(plugin) -> dict:
+    """取失效模型引用报告；任何异常都降级成空报告，不能拖垮控制台页面。"""
+    try:
+        return await plugin.provider_ref_report()
+    except Exception as e:
+        logger.warning(f"[UserGateway] 生成失效模型引用报告失败: {e}")
+        return {"stale": [], "total": 0, "counts": {}, "configured_known": False,
+                "available": [], "total_refs": 0}
+
+
 async def h_levels(plugin) -> dict:
-    """等级列表（含每个等级的额度模板与成员数）。``?kind=user|group`` 可只取一类。"""
+    """等级列表（含每个等级的额度模板与成员数）。``?kind=user|group`` 可只取一类。
+
+    附带 ``stale``（失效模型引用汇总）与每行的 ``stale_fields``，让等级页能直接
+    把「挂着已删除 / 已禁用模型」的字段标出来，不用再发一次请求。
+    """
     if not (plugin.store and plugin.store.ready):
         return err("数据库未就绪")
     levels = await plugin.store.list_levels(_q("kind") or None)
     counts = await plugin.store.level_counts()
     limits = _by_scope(await plugin.store.list_quotas("level"))
+    report = await _stale_report(plugin)
+    dead = provider_refs_mod.stale_ids(report)
     items = []
     for lv in levels:
         lid = int(lv["id"])
         items.append(
             {
+                "stale_fields": provider_refs_mod.stale_level_fields(lv, dead),
                 "id": lid,
                 "kind": str(lv.get("kind") or "user"),
                 "name": str(lv.get("name") or ""),
@@ -1306,7 +1331,9 @@ async def h_levels(plugin) -> dict:
                 "quotas": limits.get(str(lid), {}),
             },
         )
-    return ok({"items": items, "counts": counts})
+    return ok({"items": items, "counts": counts, "stale": report.get("stale") or [],
+               "stale_total": int(report.get("total") or 0),
+               "configured_known": bool(report.get("configured_known"))})
 
 
 async def h_providers(plugin) -> dict:
@@ -1336,14 +1363,66 @@ async def h_providers(plugin) -> dict:
 
     items.sort(key=lambda it: (not it["is_default"], it["label"]))
     circuit = getattr(plugin, "circuit", None)
+    report = await _stale_report(plugin)
     return ok(
         {
             "items": items,
             "default_id": default_id,
             "circuit_open": sorted(circuit.open_ids()) if circuit else [],
             "route_enabled": bool(plugin._cfg("model_route_enabled", True)),
+            # 顺带把失效引用数带给前端，等级页顶部能直接提示「有几个模型配置失效了」
+            "stale_total": int(report.get("total") or 0),
+            "stale_refs": int(report.get("total_refs") or 0),
         },
     )
+
+
+# ---------------------------------------------------------------------- #
+# 模型引用一致性（AstrBot 删除 / 禁用模型后的残留配置）
+# ---------------------------------------------------------------------- #
+async def h_model_refs(plugin) -> dict:
+    """列出库里所有指向「当前不可用模型」的引用，附状态和出现位置。
+
+    **只读**：绝不自动改数据。禁用是可逆的、加载是有时序的，自动清理会在
+    用户临时禁用模型时把配好的等级路由抹掉 —— 清理必须用户主动点。
+    """
+    return ok(await _stale_report(plugin))
+
+
+async def h_prune_model_refs(plugin) -> dict:
+    """**用户主动触发**的定向清理：只清 body.ids 里勾选的模型 id。
+
+    服务端双重保险：
+    1. 只清「当前确实未加载」的 id —— 模型重新启用后这个请求就清不掉它；
+    2. ``configured_known=False``（读不到 AstrBot 配置，无法区分禁用/删除）时直接拒绝，
+       避免一次 API 抖动让用户误删配置。
+    """
+    if not (plugin.store and plugin.store.ready):
+        return err("数据库未就绪")
+    body = await _payload()
+    raw_ids = body.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return err("请选择要清理的模型（ids 不能为空）")
+    wanted = {str(p or "").strip() for p in raw_ids if str(p or "").strip()}
+
+    report = await _stale_report(plugin)
+    if not report.get("configured_known"):
+        return err("暂时读不到 AstrBot 的模型配置，无法确认这些模型是否真的被删除，已取消清理")
+    alive = set(report.get("available") or ())
+    refused = sorted(wanted & alive)
+    safe = wanted - alive
+    if not safe:
+        return err("这些模型当前都已加载（可能刚被重新启用），无需清理，请刷新页面")
+
+    stats = await plugin.store.prune_provider_refs(safe)
+    await plugin.store.log_audit(
+        "console", "prune_model_refs",
+        json.dumps({"ids": sorted(safe), "refused": refused, **stats}, ensure_ascii=False),
+    )
+    await plugin.reload_rules()  # 内存快照里还留着旧 id，必须立刻重建
+    left = await _stale_report(plugin)
+    return ok({"pruned": sorted(safe), "refused": refused, "stats": stats,
+               "remaining": int(left.get("total") or 0)})
 
 
 async def h_set_level(plugin) -> dict:
@@ -1419,6 +1498,24 @@ async def h_set_level(plugin) -> dict:
         detect_enabled = _as_bool(body.get("detect_enabled"), default=False)
     else:
         detect_enabled = bool(int((old or {}).get("detect_enabled") or 0))
+
+    # 主 / 备模型：只拦「本次新填的、当前未加载的 id」。
+    # 用户编辑等级其它字段时会原样回传旧值；若那个模型恰好被临时禁用，
+    # 一律拒绝会让他连名字都改不了 —— 所以旧值原样保留，只挡新增悬空引用。
+    bad_ids = provider_refs_mod.validate_new_ids(
+        {
+            "provider_id": body.get("provider_id"),
+            "fallback_provider_id": body.get("fallback_provider_id"),
+        },
+        old,
+        plugin.provider_ids(),
+    )
+    if bad_ids:
+        return err(
+            "以下模型当前未加载（可能已被删除或禁用），不能新写入等级："
+            + "、".join(bad_ids)
+            + "。请先在 AstrBot「模型提供商」里启用，或从下拉里另选一个。"
+        )
 
     new_id = await plugin.store.upsert_level(
         kind,
@@ -1805,6 +1902,8 @@ def register_apis(plugin) -> None:
         ("/subject-level", h_set_subject_level, ["POST"]),
         ("/subject/model", h_set_subject_model, ["POST"]),
         ("/providers", h_providers, ["GET"]),
+        ("/model-refs", h_model_refs, ["GET"]),
+        ("/model-refs/prune", h_prune_model_refs, ["POST"]),
         ("/avatars", h_avatars, ["GET"]),
         ("/avatars/refresh", h_avatars_refresh, ["POST"]),
         ("/usage", h_usage, ["GET"]),

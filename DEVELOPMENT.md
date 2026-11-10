@@ -19,6 +19,9 @@ uv run --no-project python tests/test_gate.py
 # 改名迁移 + 标识全链路一致性自检（纯标准库，改名后必跑）
 uv run --no-project python tests/test_rename_migration.py
 
+# 失效模型引用：分类 / 写入校验 / 定向清理（真实建库）
+uv run --no-project --with aiosqlite python tests/test_provider_refs.py
+
 # /切换模型 自检（名单组装 / 序号切换 / 卡片渲染）
 uv run --no-project --with aiosqlite --with pillow python tests/test_model_switch.py
 
@@ -63,6 +66,7 @@ astrbot_plugin_moe_permission/
 ├── model_switch.py      # /切换模型：可选名单组装、序号会话、按场景落库（M12）
 ├── detect.py            # /切换模型检测：调 model_panel 探测 + 两道冷却 + 结果注解（v1.3.13）
 ├── rename_migration.py  # 改名一次性搬迁：旧数据目录 / 旧配置 → 新插件（v1.5.0）
+├── provider_refs.py     # 失效模型引用分类 / 校验（v1.5.1，纯函数）
 ├── model_card.py        # 卡片渲染（Pillow，画不出来就返回 None 让调用方走文本兜底）
 ├── recall.py            # 临时消息到点自动撤回（仅 QQ；抓 OneBot 的 message_id）
 ├── webui_api.py         # 控制台后端路由（AstrBot 桥接信封）

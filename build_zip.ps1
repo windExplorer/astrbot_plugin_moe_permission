@@ -74,6 +74,7 @@ $includeList = @(
     "recall.py",         # auto-recall temporary messages (v1.3.9)
     "detect.py",         # /switch-model-detect: proxies model_panel detection (v1.3.18)
     "rename_migration.py",  # one-shot user_gateway -> moe_permission data/config migration (v1.5.0)
+    "provider_refs.py",     # stale model reference report / prune (v1.5.1)
     "_conf_schema.json",
     "metadata.yaml",
     "requirements.txt",

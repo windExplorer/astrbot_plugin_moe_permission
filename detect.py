@@ -446,6 +446,25 @@ class ModelDetector:
                 return
 
         options = [o for o in (data.get("options") or []) if o.get("provider_id")]
+        # 防御：describe() 已经把失效 id 剔掉了，这里再按「当前已加载」过一遍，
+        # 免得将来有人从缓存 / 旧会话拿到 options 时，把已删除或禁用的模型送去
+        # 真打一遍（既白花钱，对方也只会返回探测失败）。
+        known = None
+        getter = getattr(plugin, "provider_ids", None)
+        if callable(getter):
+            try:
+                known = set(getter() or ())
+            except Exception:
+                known = None
+        if known:
+            options = [o for o in options if str(o["provider_id"]) in known]
+        if not options:
+            await self._notice(
+                plugin, event, subject,
+                "当前分组没有可检测的模型",
+                "配置的模型可能已被删除或禁用，请让管理员在控制台清理后重试",
+            )
+            return
         items = await self.snapshot([str(o["provider_id"]) for o in options])
         todo, skipped = self._split(options, items)
         # cap = 0（默认）= 不限：一次把分组里的可用模型测完（见 max_models 的说明）。

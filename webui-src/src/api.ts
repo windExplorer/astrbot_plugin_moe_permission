@@ -353,6 +353,8 @@ export interface LevelRow {
   switch_providers: string[];
   members: number;
   quotas: Record<string, { limit_tokens: number; mode: string; reset_at: number | null }>;
+  /** 该等级里引用了「已删除 / 已禁用 / 未加载」模型的字段（后端实时算，前端标红） */
+  stale_fields?: string[];
 }
 
 /** 等级编辑负载：``quotas`` 里 ``limit_tokens=null`` 或 ``delete=true`` 表示删除该周期。 */
@@ -553,8 +555,41 @@ export function apiProviders() {
 }
 
 export function apiLevels(kind?: "user" | "group") {
-  return apiGet<{ items: LevelRow[]; counts: Record<string, number> }>(
+  return apiGet<{ items: LevelRow[]; counts: Record<string, number>; stale?: StaleModelRef[]; stale_total?: number; configured_known?: boolean }>(
     `/levels${kind ? `?kind=${kind}` : ""}`,
+  );
+}
+
+/** 一条失效的模型引用：模型 id、状态、以及它出现在哪些等级 / 专属配置里。 */
+export interface StaleModelRef {
+  provider_id: string;
+  /** disabled=已禁用（可逆）/ unavailable=未加载 / deleted=配置里已删 / unknown=读不到配置 */
+  status: "disabled" | "unavailable" | "deleted" | "unknown";
+  status_text: string;
+  refs: { where: string; label: string; field?: string; level_id?: number; scope_type?: string; scope_id?: string }[];
+  ref_count: number;
+}
+
+export interface ModelRefsReport {
+  available: string[];
+  configured_known: boolean;
+  stale: StaleModelRef[];
+  counts: Record<string, number>;
+  total: number;
+  total_refs: number;
+}
+
+/** 只读：列出库里所有指向「当前不可用模型」的引用。绝不会自动改数据。 */
+export function apiModelRefs() {
+  return apiGet<ModelRefsReport>("/model-refs");
+}
+
+/** 用户主动勾选后清理；服务端仍会二次校验「当前确实未加载」才动手。 */
+export function apiPruneModelRefs(ids: string[]) {
+  return apiPost<{ pruned: string[]; refused: string[]; stats: Record<string, number>; remaining: number }>(
+    "/model-refs/prune",
+    { ids },
+    20000,
   );
 }
 

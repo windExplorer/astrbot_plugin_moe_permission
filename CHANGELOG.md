@@ -4,6 +4,64 @@
 历史条目中出现的旧插件名 `astrbot_plugin_user_gateway` 已在 v1.5.0 改名时统一替换为新名，
 仅为阅读连贯，不代表当时就叫这个名字。
 
+## v1.5.1（AstrBot 删除 / 禁用模型后，插件里的悬空引用现在能看见、能定向清理）
+
+### 现象
+
+用户反馈：「astrbot 删除或者禁用某些模型之后，我们插件里面应该也要处理一下吧」。
+实际表现是：等级里的主 / 备用模型、可切换名单、好友 / 群专属模型仍挂着旧 provider id；
+控制台等级列表把它当裸 id 显示，`/切换模型` 卡片列出「暂不可用」的死项，
+`/切换模型检测` 还会把这些 id 送去 model_panel 白打一遍。请求本身不会失败
+（`pick_provider` / `route_model` 会静默回落到 AstrBot 默认模型），所以问题很隐蔽。
+
+### 根因
+
+插件此前只在**运行时**兜底（不把不存在的 id 下发给 AstrBot），以及两处**写入点**
+校验（`switch_providers` 白名单、`/subject/model`），完全没有针对
+「已持久化 provider id」的识别 / 校验 / 同步机制。唯一的 stale 清理范式
+`delete_stale_command_policies()` 只作用于指令名，没覆盖模型。
+
+### 关键取舍：不自动清理
+
+AstrBot 的「禁用」与「删除」在插件视角**完全一样** —— `manager.load_provider()`
+遇到 `enable=false` 直接 skip，`get_all_providers()` 里都看不到。但禁用是**可逆**的，
+启动时 provider 也可能加载失败或还没加载完。若在启动 / 定时任务里自动把配置里的
+「当前不可用」id 清掉，用户临时禁用一个模型就会丢掉配好的等级路由，比原 bug 更糟。
+
+所以改成：实时识别 + 明确标注 + **用户主动勾选才清理**，且清理时服务端二次确认
+「当前确实仍未加载」；读不到 AstrBot 配置时直接拒绝清理（无法区分禁用与删除）。
+
+### 修复
+
+- 新增 `provider_refs.py`（纯函数，可脱离 AstrBot 环境自检）：
+  - `collect_refs()` 汇总 `quota_level` 三列与 `policy(feature=model/model_choice)`
+    的所有引用；**不碰** `usage_log` / `audit_log`（历史账目要留着对账）；
+  - `classify()` 区分 `已禁用`（配置在、`enable=false`）/ `未加载`（配置在、加载失败）
+    / `已删除`（配置里没有）/ `状态未知`（读不到配置）；
+  - `validate_new_ids()` 供写入侧使用：只拦「本次新填的、当前未加载的 id」，
+    用户编辑等级其它字段时原值原样回传不受影响（否则模型临时禁用会连名字都改不了）。
+- `store.py` 新增 `model_ref_rows()` 与 `prune_provider_refs(ids)`：只清用户勾选的 id，
+  等级主 / 备字段置空、名单剔除、专属模型 policy 整行删除；用量与审计一律不动。
+- `main.py` 新增 `provider_config_map()`（读 AstrBot 全量配置，含禁用的）与
+  `provider_ref_report()`；新模块同步加入热重载清单与 `build_zip.ps1` 的 `$includeList`。
+- 控制台新增 `GET /model-refs`（只读报告）与 `POST /model-refs/prune`（定向清理），
+  `/levels` 与 `/providers` 附带失效数量与逐行 `stale_fields`，导入规则后附带失效报告
+  （跨机器备份**不静默丢配置**，只提示）。
+- 行为侧：`model_switch.describe()` 把「当前根本没加载」的 id 从候选名单剔除，
+  但保留**熔断中**的（临时状态，仍标暂不可用）；卡片脚部与文本兜底提示失效数量，
+  全部候选都失效时给出准确原因；`apply()` 在序号会话期内二次校验，避免卡片发出后
+  模型被删却仍写回专属模型。`detect.py` 再按已加载集合过滤一道，不白打失效模型。
+- 前端「等级与额度」页顶增加告警条与清理弹窗：逐条列出状态、出现位置，
+  默认只勾选「已删除」的，二次确认后才提交。二次确认刻意不用 `useDialog()`
+  （`App.vue` 只挂了 `NMessageProvider`，没有 `NDialogProvider`，会直接崩）。
+- 新增 `tests/test_provider_refs.py`：引用收集、五态分类、报告、写入校验、
+  真实建库下的定向清理与「历史用量不被删」。
+
+### 升级注意
+
+无需迁移数据。建议在控制台「等级与额度」页确认有没有失效引用；已禁用 / 未加载的
+模型建议**保留**，重新启用后原配置照常生效。
+
 ## v1.5.0（插件改名：astrbot_plugin_user_gateway → astrbot_plugin_moe_permission）
 
 ### 需求

@@ -3,8 +3,11 @@
 // 解析规则见下方「额度说明」卡片，与后端闸门（gate.py）的档位链严格一致。
 import { computed, h, onMounted, ref } from "vue";
 import {
+  NAlert,
   NButton,
   NCard,
+  NCheckbox,
+  NCheckboxGroup,
   NDataTable,
   NEmpty,
   NForm,
@@ -19,6 +22,7 @@ import {
   NRadioGroup,
   NSelect,
   NSpace,
+  NSpin,
   NSwitch,
   NTabPane,
   NTabs,
@@ -32,18 +36,88 @@ import {
   apiDeleteLevel,
   apiGet,
   apiLevels,
+  apiModelRefs,
   apiPost,
   apiProviders,
+  apiPruneModelRefs,
   apiSetLevel,
   type LevelPayload,
   type LevelRow,
+  type ModelRefsReport,
   type ProviderRow,
   type QuotaRow,
+  type StaleModelRef,
 } from "../api";
 
 const message = useMessage();
 const loading = ref(false);
 const saving = ref(false);
+
+// ------------------------------------------------------------------ //
+// 失效模型引用（AstrBot 删除 / 禁用模型后，库里残留的旧 id）
+// 只提示、由用户主动勾选清理；绝不自动删（禁用是可逆的、加载是有时序的）
+// ------------------------------------------------------------------ //
+const staleRefs = ref<StaleModelRef[]>([]);
+const staleTotal = ref(0);
+const configuredKnown = ref(true);
+const showStaleModal = ref(false);
+const staleLoading = ref(false);
+const stalePruning = ref(false);
+const staleReport = ref<ModelRefsReport | null>(null);
+const staleChecked = ref<string[]>([]);
+// 二次确认不用 useDialog：App.vue 只挂了 NMessageProvider，没有 NDialogProvider
+const showPruneConfirm = ref(false);
+
+const statusType: Record<string, "warning" | "error" | "default" | "info"> = {
+  deleted: "error",
+  disabled: "warning",
+  unavailable: "info",
+  unknown: "default",
+};
+
+async function openStaleModal() {
+  showStaleModal.value = true;
+  staleLoading.value = true;
+  try {
+    const report = await apiModelRefs();
+    staleReport.value = report;
+    // 用报告自己的口径：读不到 AstrBot 配置时禁止清理（会把「暂时没加载」误判成「已删除」）
+    configuredKnown.value = report.configured_known !== false;
+    // 默认只勾「已删除」的：禁用 / 未加载的随时可能回来，不替用户做主
+    staleChecked.value = (report.stale || [])
+      .filter((it) => it.status === "deleted")
+      .map((it) => it.provider_id);
+  } catch (e: any) {
+    message.error(e?.message || String(e));
+  } finally {
+    staleLoading.value = false;
+  }
+}
+
+async function pruneStale() {
+  if (!staleChecked.value.length) {
+    message.warning("请先勾选要清理的模型");
+    return;
+  }
+  showPruneConfirm.value = true;
+}
+
+async function doPrune() {
+  stalePruning.value = true;
+  try {
+    const res = await apiPruneModelRefs(staleChecked.value);
+    message.success(
+      `已清理 ${res.pruned.length} 个模型${res.refused.length ? `（${res.refused.length} 个重新启用，已跳过）` : ""}`,
+    );
+    showPruneConfirm.value = false;
+    showStaleModal.value = false;
+    await load();
+  } catch (e: any) {
+    message.error(e?.message || String(e));
+  } finally {
+    stalePruning.value = false;
+  }
+}
 
 const levels = ref<LevelRow[]>([]);
 const globalRows = ref<QuotaRow[]>([]);
@@ -71,7 +145,10 @@ const providerOptions = computed(() =>
 function providerLabel(id: string): string {
   if (!id) return "";
   const p = providers.value.find((x) => x.id === id);
-  return p ? p.label || p.model || p.id : id;
+  const base = p ? p.label || p.model || p.id : id;
+  // 已删除 / 已禁用的模型不在 providers 里，别只显示一个裸 id 让用户一头雾水
+  const dead = staleRefs.value.find((x) => x.provider_id === id);
+  return dead ? `${base}（${dead.status_text}）` : base;
 }
 
 const PERIODS: { value: "day" | "month" | "total"; label: string }[] = [
@@ -99,6 +176,9 @@ async function load() {
       apiProviders().catch(() => ({ items: [], circuit_open: [], route_enabled: true })),
     ]);
     levels.value = lv.items || [];
+    staleRefs.value = lv.stale || [];
+    staleTotal.value = lv.stale_total || 0;
+    configuredKnown.value = lv.configured_known !== false;
     globalRows.value = glob.items || [];
     // 对象专属额度：好友 / 群 / 群成员（member 的 scope_id 是「群号:QQ」）
     specificRows.value = (all.items || []).filter(
@@ -426,16 +506,25 @@ const levelColumns: DataTableColumns<LevelRow> = [
       }
       const main = row.provider_id ? providerLabel(row.provider_id) : "未配置";
       const fb = row.fallback_provider_id ? providerLabel(row.fallback_provider_id) : "";
+      const bad = row.stale_fields || [];
+      const modelStale = bad.includes("provider_id") || bad.includes("fallback_provider_id");
       return h(
         NTooltip,
         { trigger: "hover" },
         {
           trigger: () =>
             h("div", { style: "line-height:1.35" }, [
-              h("div", { style: "font-size:12.5px" }, main),
+              h("div", { style: "font-size:12.5px" }, [
+                main,
+                modelStale
+                  ? h(NTag, { size: "tiny", type: "error", bordered: false, style: "margin-left:6px" }, { default: () => "已失效" })
+                  : null,
+              ]),
               fb ? h("div", { style: "font-size:12px;opacity:.65" }, `备用：${fb}`) : null,
             ]),
-          default: () => `主模型：${main}\n备用模型：${fb || "（未配置）"}`,
+          default: () =>
+            `主模型：${main}\n备用模型：${fb || "（未配置）"}` +
+            (modelStale ? "\n\n有模型已被删除或禁用，运行时会回落 AstrBot 默认；可在页顶「失效模型引用」里清理。" : ""),
         },
       );
     },
@@ -675,6 +764,27 @@ onMounted(load);
 
 <template>
   <n-space vertical :size="14">
+    <!-- AstrBot 删除 / 禁用模型后，库里残留的旧 id：只提示，清理必须用户主动点 -->
+    <n-alert v-if="staleTotal > 0" type="warning" :bordered="false">
+      <template #header>发现 {{ staleTotal }} 个模型配置已失效</template>
+      <div style="font-size: 13px; line-height: 1.6">
+        <div>
+          AstrBot 里部分模型已被删除、禁用或尚未加载，等级路由 / 可切换名单 / 专属模型里仍引用着它们。
+          这些配置不会生效（请求会回落到 AstrBot 默认模型），插件也<b>不会自动删除</b>——
+          禁用是临时可逆的，重新启用后原来的配置还能照常工作。
+        </div>
+        <div v-if="!configuredKnown" style="margin-top: 4px; opacity: 0.8">
+          当前读不到 AstrBot 的模型配置，无法区分「已删除」与「暂时未加载」，已暂停清理入口。
+        </div>
+        <n-space align="center" :size="10" style="margin-top: 8px">
+          <n-button size="small" type="warning" secondary @click="openStaleModal">
+            查看并处理
+          </n-button>
+          <span style="font-size: 12px; opacity: 0.7">历史用量与审计日志会保留，不受影响</span>
+        </n-space>
+      </div>
+    </n-alert>
+
     <n-card size="small" title="额度说明">
       <n-space vertical :size="4" style="font-size: 13px; opacity: 0.82">
         <span>· 额度口径 = 输入 token + 缓存 token + 输出 token（「缓存计入」开关在配置页）。</span>
@@ -1050,6 +1160,88 @@ onMounted(load);
         <n-space justify="end">
           <n-button @click="showQuotaEditor = false">取消</n-button>
           <n-button type="primary" :loading="quotaSaving" @click="saveQuota">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 失效模型引用：每个 id 的状态 + 出现位置，勾选后才清理 -->
+    <n-modal v-model:show="showStaleModal" preset="card" title="失效模型引用" style="width: 720px; max-width: 94vw">
+      <n-spin :show="staleLoading">
+        <n-space vertical :size="10">
+          <n-alert type="info" :bordered="false" style="font-size: 12.5px">
+            插件不会自动删除这些配置。已禁用 / 未加载的模型随时可能重新启用，
+            清理后原配置会回落为「跟随 AstrBot 默认」，且不可撤销；历史用量与审计日志保留。
+          </n-alert>
+          <div v-if="!staleReport?.stale?.length" style="padding: 18px 0; text-align: center; opacity: 0.7">
+            没有失效的模型引用
+          </div>
+          <n-checkbox-group v-else v-model:value="staleChecked" style="width: 100%">
+            <n-space vertical :size="10" style="width: 100%">
+              <div
+                v-for="it in staleReport!.stale"
+                :key="it.provider_id"
+                style="border: 1px solid rgba(128,128,128,.22); border-radius: 8px; padding: 10px 12px"
+              >
+                <n-checkbox :value="it.provider_id" :disabled="!configuredKnown">
+                  <span style="font-weight: 500">{{ it.provider_id }}</span>
+                  <n-tag
+                    size="tiny"
+                    :type="statusType[it.status] || 'default'"
+                    :bordered="false"
+                    style="margin-left: 8px"
+                  >
+                    {{ it.status_text }}
+                  </n-tag>
+                  <span style="font-size: 12px; opacity: 0.7; margin-left: 8px">
+                    {{ it.ref_count }} 处引用
+                  </span>
+                </n-checkbox>
+                <div style="font-size: 12px; opacity: 0.72; line-height: 1.7; margin-top: 6px; padding-left: 24px">
+                  <div v-for="(ref, i) in it.refs" :key="i">· {{ ref.label }}</div>
+                </div>
+              </div>
+            </n-space>
+          </n-checkbox-group>
+        </n-space>
+      </n-spin>
+      <template #footer>
+        <n-space justify="space-between" align="center">
+          <span style="font-size: 12px; opacity: 0.7">
+            默认只勾选「已删除」的；已禁用 / 未加载的建议保留
+          </span>
+          <n-space :size="8">
+            <n-button @click="showStaleModal = false">关闭</n-button>
+            <n-button
+              type="error"
+              secondary
+              :loading="stalePruning"
+              :disabled="!configuredKnown || !staleChecked.length"
+              @click="pruneStale"
+            >
+              清理所选（{{ staleChecked.length }}）
+            </n-button>
+          </n-space>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 清理二次确认（不依赖 NDialogProvider） -->
+    <n-modal
+      v-model:show="showPruneConfirm"
+      preset="card"
+      title="确认清理失效模型引用"
+      style="width: 480px; max-width: 94vw"
+    >
+      <div style="font-size: 13px; line-height: 1.7">
+        将从等级的主 / 备用模型、可切换名单和对象专属模型里，摘掉
+        <b>{{ staleChecked.length }}</b> 个模型：{{ staleChecked.join("、") }}。
+        相关配置会回落为「跟随 AstrBot 默认」，历史用量与审计日志保留。
+        <b>此操作不可撤销。</b>
+      </div>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showPruneConfirm = false">取消</n-button>
+          <n-button type="error" :loading="stalePruning" @click="doPrune">确认清理</n-button>
         </n-space>
       </template>
     </n-modal>

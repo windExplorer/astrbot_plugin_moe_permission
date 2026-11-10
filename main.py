@@ -58,6 +58,7 @@ def _reload_sibling_modules() -> None:
     # 按依赖顺序（被依赖者在前）：gate / store 是底座，webui_api 依赖它们。
     for name in (
         "rename_migration",
+        "provider_refs",
         "quota",
         "gate",
         "store",
@@ -82,6 +83,7 @@ _reload_sibling_modules()
 
 try:  # 包内相对导入（AstrBot 正常加载路径）
     from . import quota as quota_mod
+    from . import provider_refs as provider_refs_mod
     from .rename_migration import migrate_renamed_plugin
     from .avatar import AvatarCache
     from .gate import (
@@ -114,6 +116,7 @@ except ImportError as _rel_err:
     # v0.2.0 就真的这么翻车过，所以这里把两种错误都原样带出来。
     try:
         import quota as quota_mod  # type: ignore
+        import provider_refs as provider_refs_mod  # type: ignore
         from rename_migration import migrate_renamed_plugin  # type: ignore
         from avatar import AvatarCache  # type: ignore
         from gate import (  # type: ignore
@@ -638,6 +641,53 @@ class UserGatewayPlugin(Star):
     def provider_ids(self) -> set[str]:
         """当前**已加载可用**的对话提供商 id 集合。"""
         return set(self.provider_map())
+
+    def provider_config_map(self) -> Optional[dict[str, dict[str, Any]]]:
+        """AstrBot **配置里**的全部对话模型（含已禁用 / 加载失败的）``{id: {enable}}``。
+
+        ``get_all_providers()`` 只给已加载实例，看不出「禁用」和「删除」的区别：
+        禁用的模型配置还在、随时能启用，删掉的则配置里彻底没了。这里读配置是为了
+        给控制台区分这两种状态 —— **返回 None 表示读不到配置**，此时一律按
+        「状态未知」处理，绝不推断成「已删除」而诱导用户清理。
+
+        只取配置里声明的字段，不缓存：用户在 AstrBot 后台改完，下次打开页面就是新的。
+        """
+        raw: Any = None
+        try:
+            cfg = self.context.get_config()
+            if cfg is not None:
+                raw = cfg.get("provider")
+        except Exception as e:
+            logger.debug(f"[UserGateway] 读取 AstrBot 模型配置失败（忽略）: {e}")
+        if raw is None:
+            # 老版本 / 配置对象形态不同时退到 manager 的内存视图
+            try:
+                raw = getattr(getattr(self.context, "provider_manager", None), "providers_config", None)
+            except Exception:
+                raw = None
+        if not isinstance(raw, (list, tuple)):
+            return None
+        out: dict[str, dict[str, Any]] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("id") or "").strip()
+            if pid:
+                out[pid] = {"id": pid, "enable": bool(item.get("enable", True))}
+        return out
+
+    async def provider_ref_report(self) -> dict[str, Any]:
+        """库里的模型引用 vs 当前 AstrBot 模型：生成失效引用报告（不改动任何数据）。"""
+        levels, policies = [], []
+        if self.store and self.store.ready:
+            try:
+                levels, policies = await self.store.model_ref_rows()
+            except Exception as e:
+                logger.warning(f"[UserGateway] 读取模型引用失败: {e}")
+        refs = provider_refs_mod.collect_refs(levels, policies)
+        return provider_refs_mod.build_report(
+            refs, self.provider_ids(), self.provider_config_map()
+        )
 
     def _provider_by_id(self, pid: str) -> Optional[Any]:
         """按 id 从已加载的提供商里找对象（找不到返回 None）。"""

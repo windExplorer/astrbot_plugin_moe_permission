@@ -269,6 +269,18 @@ class ModelSwitcher:
         if current_id and current_source != SOURCE_DEFAULT:
             add(current_id)
 
+        # v1.5.1：AstrBot 删除 / 禁用模型后，这些 id 会残留在等级路由和专属模型里。
+        # 把「当前根本没加载」的从候选名单剔除 —— 它们是死引用，列出来既切不了，
+        # 又会被 /切换模型检测 拿去白打一遍。**熔断中的仍在 available 里**，
+        # 那只是临时状态，照旧展示并标「暂不可用」，两者不能混为一谈。
+        stale_ids = sorted({pid for pid in ordered if pid not in available})
+        if stale_ids:
+            ordered = [pid for pid in ordered if pid in available]
+        # 当前生效的那个也可能已经失效（例如系统默认模型被删）：不能让卡片头部
+        # 顶着一个不存在的模型名说「当前使用」。
+        if current_id and current_id not in available:
+            current_id = ""
+
         infos = plugin.provider_map()
 
         options: list[dict[str, Any]] = []
@@ -306,6 +318,8 @@ class ModelSwitcher:
             "open": bool(options),
             # 名单本身（不等于 options）：用来区分「配了名单」与「走兜底三项」
             "allowed": allowed,
+            # 被剔除的失效 id（AstrBot 已删除 / 禁用 / 未加载）：卡片脚部会提示去控制台清理
+            "stale_ids": stale_ids,
             "can_switch": can_switch,
             "readonly_reason": readonly_reason,
             "is_admin": is_admin,
@@ -590,13 +604,15 @@ class ModelSwitcher:
         开了自动撤回时把「多少秒后撤回」写出来（与有效期是同一个数字），
         用户才不会以为卡片是发丢了。
         """
+        stale_n = len(data.get("stale_ids") or [])
+        stale_hint = f" · {stale_n} 个配置已失效，请在控制台清理" if stale_n else ""
         if not data.get("can_switch"):
             reason = str(data.get("readonly_reason") or REASON_LEVEL_OFF)
-            return READONLY_HINT.format(reason=reason)
+            return READONLY_HINT.format(reason=reason) + stale_hint
         ttl = self.ttl()
         if self.recall_on():
-            return f"回复序号切换（{ttl} 秒后自动撤回）· 0 = 恢复默认"
-        return f"回复序号切换 · {ttl} 秒内有效 · 0 = 恢复默认"
+            return f"回复序号切换（{ttl} 秒后自动撤回）· 0 = 恢复默认{stale_hint}"
+        return f"回复序号切换 · {ttl} 秒内有效 · 0 = 恢复默认{stale_hint}"
 
     def text_list(self, data: dict[str, Any], ttl: int) -> str:
         """卡片渲染不出来时的纯文本兜底（功能不能因为画不出图就没了）。"""
@@ -619,6 +635,9 @@ class ModelSwitcher:
         else:
             reason = str(data.get("readonly_reason") or REASON_LEVEL_OFF)
             lines.append(READONLY_HINT.format(reason=reason))
+        stale_n = len(data.get("stale_ids") or [])
+        if stale_n:
+            lines.append(f"另有 {stale_n} 个模型已被删除或禁用，已从名单移除，请在控制台清理。")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ #
@@ -671,6 +690,15 @@ class ModelSwitcher:
         pid = str(picked.get("provider_id") or "")
         if not pid:
             return {"ok": False, "message": "该选项不可用，请重新发送 /切换模型。"}
+        # 卡片发出后到用户回序号之间，AstrBot 可能刚删 / 禁用过这个模型。
+        # 这里再校验一次，避免把已失效的 id 写回专属模型（否则配置里又多一条死引用）。
+        if pid not in plugin.provider_ids():
+            self.clear(subject)
+            return {
+                "ok": False,
+                "message": f"「{picked.get('label') or pid}」现在已不可用（可能被删除或禁用），"
+                           "请重新发送 /切换模型 看最新名单。",
+            }
 
         await plugin.store.set_policy(
             scope_type,
@@ -717,11 +745,18 @@ class ModelSwitcher:
             await plugin._send(event, GROUP_REFUSE)
             return
         if not data.get("open"):
-            # 连展示的东西都没有（没归级、也没任何候选）：说清楚而不是发一张空卡
-            await plugin._send(
-                event,
-                f"当前分组（{self.group_label(data)}）没有可展示的模型信息，请联系管理员。",
-            )
+            # 连展示的东西都没有（没归级、也没任何候选）：说清楚而不是发一张空卡。
+            # 如果恰好是「配的模型全被删 / 禁用了」，要点破原因，否则用户只会以为插件坏了。
+            stale_n = len(data.get("stale_ids") or [])
+            if stale_n:
+                text = (
+                    f"当前分组（{self.group_label(data)}）配置的 {stale_n} 个模型都已被删除或禁用，"
+                    "没有可用模型了。请让管理员在控制台「等级与额度 → 失效模型引用」里清理，"
+                    "或先在 AstrBot 里重新启用模型。"
+                )
+            else:
+                text = f"当前分组（{self.group_label(data)}）没有可展示的模型信息，请联系管理员。"
+            await plugin._send(event, text)
             return
 
         text = str(arg or "").strip()
