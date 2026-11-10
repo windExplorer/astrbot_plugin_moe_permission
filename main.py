@@ -1,6 +1,6 @@
 """萌萌权限控制台：按好友 / 按群管控 LLM 权限与 token 额度，并提供用量统计。
 
-实现依据见工作区文档 ``docs/astrbot_plugin_user_gateway_PRD.md``。
+实现依据见工作区文档 ``docs/astrbot_plugin_moe_permission_PRD.md``。
 
 当前进度（M0 骨架）：
 - 插件生命周期：数据目录、SQLite 建库、配置读取、控制台路由注册
@@ -57,6 +57,7 @@ def _reload_sibling_modules() -> None:
 
     # 按依赖顺序（被依赖者在前）：gate / store 是底座，webui_api 依赖它们。
     for name in (
+        "rename_migration",
         "quota",
         "gate",
         "store",
@@ -81,6 +82,7 @@ _reload_sibling_modules()
 
 try:  # 包内相对导入（AstrBot 正常加载路径）
     from . import quota as quota_mod
+    from .rename_migration import migrate_renamed_plugin
     from .avatar import AvatarCache
     from .gate import (
         Cooldown,
@@ -112,6 +114,7 @@ except ImportError as _rel_err:
     # v0.2.0 就真的这么翻车过，所以这里把两种错误都原样带出来。
     try:
         import quota as quota_mod  # type: ignore
+        from rename_migration import migrate_renamed_plugin  # type: ignore
         from avatar import AvatarCache  # type: ignore
         from gate import (  # type: ignore
             Cooldown,
@@ -144,7 +147,7 @@ except ImportError as _rel_err:
             "请用仓库里最新的 zip 重新安装，或把缺失的 .py 补进插件目录。"
         ) from _flat_err
 
-PLUGIN_NAME = "astrbot_plugin_user_gateway"
+PLUGIN_NAME = "astrbot_plugin_moe_permission"
 
 # 当前生效的插件实例（发送钩子要用它拿 store）。
 # 用模块级变量而不是闭包捕获插件实例：插件热重载时旧实例会被替换，
@@ -176,6 +179,9 @@ class UserGatewayPlugin(Star):
         super().__init__(context)
         # AstrBot 注入的插件配置（AstrBotConfig，dict 子类，带 save_config()）
         self.config = config or {}
+        # 改名迁移要读 AstrBotConfig 的 config_path / first_deploy / save_config()；
+        # 上面 `or {}` 在配置对象为空时会退化成普通 dict、丢掉这些属性，故留原对象。
+        self._raw_config = config
         self.plugin_version = _read_plugin_version()
 
         # 数据目录与数据库（initialize() 中创建）
@@ -263,6 +269,21 @@ class UserGatewayPlugin(Star):
         except Exception as e:
             logger.error(f"[UserGateway] 数据目录创建失败: {e}")
             return
+
+        # v1.5.0：插件改名的一次性搬迁。必须在建库与 reload_rules() 之前：
+        # 数据库文件要先就位，配置值也要先搬进来，否则本轮会按 schema 默认值启动。
+        try:
+            moved_files, moved_keys = migrate_renamed_plugin(
+                self.data_dir, self._raw_config or self.config, logger.info
+            )
+            if moved_files or moved_keys:
+                logger.info(
+                    f"[UserGateway] 改名迁移完成：{moved_files} 个数据文件 / "
+                    f"{moved_keys} 个配置键（旧文件保留）"
+                )
+        except Exception as e:
+            # fail-open：迁移失败不能阻断插件启动，最坏情况是用户手动导入规则备份
+            logger.warning(f"[UserGateway] 改名迁移失败（不阻断启动）: {e}")
 
         try:
             self.store = Store(str(self.data_dir / "user_gateway.db"))

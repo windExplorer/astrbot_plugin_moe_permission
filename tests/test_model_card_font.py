@@ -79,7 +79,7 @@ def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="ug_font_"))
     data = tmp / "data"
     shared = data / "fonts"
-    private = data / "plugin_data" / "astrbot_plugin_user_gateway" / "fonts"
+    private = data / "plugin_data" / "astrbot_plugin_moe_permission" / "fonts"
     shared.mkdir(parents=True)
     private.mkdir(parents=True)
 

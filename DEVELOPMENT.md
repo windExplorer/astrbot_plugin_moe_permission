@@ -1,7 +1,7 @@
 # 开发者文档（DEVELOPMENT）
 
 > 用户向的安装与使用说明在 [README.md](README.md)；本文件只讲开发相关内容。
-> 需求与设计文档见工作区 `docs/astrbot_plugin_user_gateway_PRD.md`，
+> 需求与设计文档见工作区 `docs/astrbot_plugin_moe_permission_PRD.md`，
 > 各版本改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 开发环境常用命令
@@ -15,6 +15,9 @@ uv run --no-project --with aiosqlite python tests/test_store.py
 
 # 判定内核自检（同上）
 uv run --no-project python tests/test_gate.py
+
+# 改名迁移 + 标识全链路一致性自检（纯标准库，改名后必跑）
+uv run --no-project python tests/test_rename_migration.py
 
 # /切换模型 自检（名单组装 / 序号切换 / 卡片渲染）
 uv run --no-project --with aiosqlite --with pillow python tests/test_model_switch.py
@@ -50,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_zip.ps1
 ## 目录结构
 
 ```
-astrbot_plugin_user_gateway/
+astrbot_plugin_moe_permission/
 ├── main.py              # 插件入口：生命周期、规则内存缓存、发送钩子（最后回复）、控制台路由注册
 ├── gate.py              # 判定内核（纯逻辑零 IO）：档位链 / 权限 / 额度 / 冷却
 ├── quota.py             # 额度纯计算：周期重置、token 口径换算与估算
@@ -59,6 +62,7 @@ astrbot_plugin_user_gateway/
 ├── avatar.py            # QQ / 群头像抓取与磁盘缓存
 ├── model_switch.py      # /切换模型：可选名单组装、序号会话、按场景落库（M12）
 ├── detect.py            # /切换模型检测：调 model_panel 探测 + 两道冷却 + 结果注解（v1.3.13）
+├── rename_migration.py  # 改名一次性搬迁：旧数据目录 / 旧配置 → 新插件（v1.5.0）
 ├── model_card.py        # 卡片渲染（Pillow，画不出来就返回 None 让调用方走文本兜底）
 ├── recall.py            # 临时消息到点自动撤回（仅 QQ；抓 OneBot 的 message_id）
 ├── webui_api.py         # 控制台后端路由（AstrBot 桥接信封）

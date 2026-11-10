@@ -7,7 +7,7 @@
 
 import { whenBridgeReady } from "./bridge";
 
-const PAGE_PLUGIN_NAME = "astrbot_plugin_user_gateway";
+const PAGE_PLUGIN_NAME = "astrbot_plugin_moe_permission";
 
 // 不同 AstrBot 版本对端点前缀的处理略有差异，逐个候选尝试（首个成功即返回）。
 function endpointCandidates(routePath: string): string[] {

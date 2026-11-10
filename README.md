@@ -1,4 +1,4 @@
-# 萌萌权限控制台（astrbot_plugin_user_gateway）
+# 萌萌权限控制台（astrbot_plugin_moe_permission）
 
 <p align="center">
   <img src="logo.png" alt="萌萌权限控制台" width="180" />
@@ -35,7 +35,7 @@ AstrBot 插件：**按好友 / 按群细粒度管控 LLM 使用权限与 token �
 
 1. 在 AstrBot 后台「插件市场」搜索 **萌萌权限控制台** 安装；或「插件市场 → 本地插件 → 从文件安装」上传发布包 zip；
 2. `aiosqlite` 依赖会随插件自动安装；
-3. 安装后数据落在 `data/plugin_data/astrbot_plugin_user_gateway/user_gateway.db`（SQLite，自动建表）。
+3. 安装后数据落在 `data/plugin_data/astrbot_plugin_moe_permission/user_gateway.db`（SQLite，自动建表）。
 
 装好后在 AstrBot 后台的「插件页面」打开**权限控制台**即可使用。
 

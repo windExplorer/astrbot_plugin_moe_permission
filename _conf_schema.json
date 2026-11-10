@@ -195,7 +195,7 @@
   },
   "model_card_font": {
     "description": "卡片字体文件路径（可选）",
-    "hint": "留空 = 自动，按这个顺序找并逐个真加载验货：投放目录（data/plugin_data/astrbot_plugin_user_gateway/fonts → 共享 data/fonts）→ 插件自带（assets/fonts 的圆体）→ 系统字体（Windows 微软雅黑 / Linux Noto CJK 等）。Docker 推荐做法：把 .ttc/.otf/.ttf/.woff2 丢进挂载卷的 data/fonts/ 即可换字体，不用填路径、不用重装插件，而且和「萌萌模型控制台」认同一个目录（丢一次两个插件都生效）；目录里有多个时按 霞鹜文楷 > 圆体 > Noto > 思源 > 苹方 > 雅黑 挑。要精确指定某一份就填绝对路径。全都找不到时不发图片，改为纯文本列表。",
+    "hint": "留空 = 自动，按这个顺序找并逐个真加载验货：投放目录（data/plugin_data/astrbot_plugin_moe_permission/fonts → 共享 data/fonts）→ 插件自带（assets/fonts 的圆体）→ 系统字体（Windows 微软雅黑 / Linux Noto CJK 等）。Docker 推荐做法：把 .ttc/.otf/.ttf/.woff2 丢进挂载卷的 data/fonts/ 即可换字体，不用填路径、不用重装插件，而且和「萌萌模型控制台」认同一个目录（丢一次两个插件都生效）；目录里有多个时按 霞鹜文楷 > 圆体 > Noto > 思源 > 苹方 > 雅黑 挑。要精确指定某一份就填绝对路径。全都找不到时不发图片，改为纯文本列表。",
     "type": "string",
     "default": ""
   },

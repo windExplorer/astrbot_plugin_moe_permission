@@ -1,6 +1,6 @@
 """控制台后端路由（AstrBot 插件 Page 的桥接 API）。
 
-路由前缀 ``/astrbot_plugin_user_gateway``（AstrBot 约定：带插件名、不带 /page），
+路由前缀 ``/astrbot_plugin_moe_permission``（AstrBot 约定：带插件名、不带 /page），
 前端通过 ``window.AstrBotPluginPage.apiGet/apiPost`` 调用，由 Dashboard 转发。
 
 ⚠️ 返回信封必须遵循 AstrBot 的桥接约定，不能自创格式。Dashboard 侧的处理是
@@ -49,7 +49,7 @@ except ImportError:  # pragma: no cover - 本地平铺调试
     from store import member_scope_id, parse_member_scope_id, parse_provider_list  # type: ignore
     from sync import sync_group_members  # type: ignore
 
-ROUTE_PREFIX = "/astrbot_plugin_user_gateway"
+ROUTE_PREFIX = "/astrbot_plugin_moe_permission"
 
 # 时间范围简写 → 秒数
 _RANGE_SECONDS = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
@@ -312,7 +312,7 @@ async def h_ping(plugin) -> dict:
     """健康检查：前端据此判断后端是否就绪，并显示版本号。"""
     return ok(
         {
-            "plugin": "astrbot_plugin_user_gateway",
+            "plugin": "astrbot_plugin_moe_permission",
             "version": getattr(plugin, "plugin_version", "unknown"),
             "db_ready": bool(plugin.store and plugin.store.ready),
             "data_dir": str(getattr(plugin, "data_dir", "")),
@@ -1194,7 +1194,7 @@ async def h_export_rules(plugin) -> dict:
         logger.error(f"[UserGateway] 导出规则失败: {e}")
         return err(f"导出失败：{e}")
     meta = {
-        "plugin": "astrbot_plugin_user_gateway",
+        "plugin": "astrbot_plugin_moe_permission",
         "version": str(getattr(plugin, "plugin_version", "") or ""),
         # 结构版本：导入时会拿它和当前版本比，来自更新版本的备份直接拒绝（避免丢字段）
         "schema_version": int(STORE_SCHEMA_VERSION),
@@ -1205,7 +1205,7 @@ async def h_export_rules(plugin) -> dict:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return ok(
         {
-            "filename": f"user_gateway_rules_{stamp}.json",
+            "filename": f"moe_permission_rules_{stamp}.json",
             "content": json.dumps(payload, ensure_ascii=False, indent=2),
             "meta": meta,
         }

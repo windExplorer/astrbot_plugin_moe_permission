@@ -67,7 +67,7 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
 #   2) 共享 ``data/fonts`` —— 和「萌萌模型控制台」认的是同一个目录，丢一次两个插件都生效。
 # 排在**插件自带之前**：随包的圆体只是「开箱有中文」的兜底，不该盖掉用户明确放进来的字体。
 DROPIN_FONT_DIRS: tuple[tuple[str, ...], ...] = (
-    ("plugin_data", "astrbot_plugin_user_gateway", "fonts"),
+    ("plugin_data", "astrbot_plugin_moe_permission", "fonts"),
     ("fonts",),
 )
 # Pillow/FreeType 认这几类容器（woff2 实测能直接加载，不必先转成 ttf）

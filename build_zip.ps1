@@ -1,4 +1,4 @@
-# Package astrbot_plugin_user_gateway into an AstrBot-installable zip.
+# Package astrbot_plugin_moe_permission into an AstrBot-installable zip.
 #
 # Design notes (learned from sibling plugins, keep them):
 #   1) EXPLICIT include list. New top-level .py modules MUST be added here too,
@@ -29,7 +29,7 @@ if ($PSScriptRoot) {
     $root = (Get-Location).Path
 }
 
-$pluginName = "astrbot_plugin_user_gateway"
+$pluginName = "astrbot_plugin_moe_permission"
 $distDir = Join-Path $root "dist"
 
 # --- version from metadata.yaml (UTF8) ---
@@ -73,6 +73,7 @@ $includeList = @(
     "model_card.py",     # Pillow card renderer (v1.3.3)
     "recall.py",         # auto-recall temporary messages (v1.3.9)
     "detect.py",         # /switch-model-detect: proxies model_panel detection (v1.3.18)
+    "rename_migration.py",  # one-shot user_gateway -> moe_permission data/config migration (v1.5.0)
     "_conf_schema.json",
     "metadata.yaml",
     "requirements.txt",

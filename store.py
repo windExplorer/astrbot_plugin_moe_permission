@@ -1,6 +1,6 @@
 """SQLite 存储层：权限规则、等级、token 额度、用量、好友/群缓存、最后消息。
 
-设计要点（详见 docs/astrbot_plugin_user_gateway_PRD.md §7）：
+设计要点（详见 docs/astrbot_plugin_moe_permission_PRD.md §7）：
 
 - 单文件库 ``<插件数据目录>/user_gateway.db``，WAL 模式 + ``synchronous=NORMAL``，
   满足「统计写入频繁 + 控制台随时查询」的并发读写。
@@ -28,7 +28,7 @@ try:
     import aiosqlite
 except ImportError as e:  # pragma: no cover - AstrBot 启动时按 requirements 安装
     raise ImportError(
-        "astrbot_plugin_user_gateway 需要 aiosqlite，请先安装：pip install aiosqlite",
+        "astrbot_plugin_moe_permission 需要 aiosqlite，请先安装：pip install aiosqlite",
     ) from e
 
 

@@ -1,4 +1,4 @@
-# Build the Vue3 console (permission-console) for astrbot_plugin_user_gateway.
+# Build the Vue3 console (permission-console) for astrbot_plugin_moe_permission.
 #
 # Steps:
 #   1) inject the plugin version from metadata.yaml into webui-src/src/version.ts

@@ -1,6 +1,51 @@
 # 更新日志
 
 本文件记录各版本的改动。版本号与 `metadata.yaml` 保持一致。
+历史条目中出现的旧插件名 `astrbot_plugin_user_gateway` 已在 v1.5.0 改名时统一替换为新名，
+仅为阅读连贯，不代表当时就叫这个名字。
+
+## v1.5.0（插件改名：astrbot_plugin_user_gateway → astrbot_plugin_moe_permission）
+
+### 需求
+
+用户要求插件名补上 `moe`，与 `astrbot_plugin_moe_box` / `moe_meme` / `moe_paint` /
+`moe_star_whisper` 同一套命名；确认后按「权限控制台」语义定名
+`astrbot_plugin_moe_permission`，并连同本地目录、GitHub 仓库名、`remote`、`repo` 字段一起改。
+
+### 问题 / 根因
+
+AstrBot 用「插件目录名 / `metadata.yaml` 的 `name`」当插件身份（`star_manager` 用
+`root_dir_name` 拼 `data/config/<名>_config.json`，`StarTools.get_data_dir()` 用插件名拼
+`data/plugin_data/<名>/`）。改名后等于一个全新插件：老用户的权限规则、等级、额度、
+用量统计（`user_gateway.db`）、头像缓存、投放字体、以及插件配置都会被孤立在旧名下。
+另外前端 `api.ts` 的 `PAGE_PLUGIN_NAME` 与后端 `ROUTE_PREFIX` 是配套的路由前缀，
+只改一边会让控制台所有接口 404。
+
+### 修复
+
+- **标识全链路同步**：`metadata.yaml`（`name` / `repo`）、`main.py` 的 `PLUGIN_NAME`
+  与 `@register`、`webui_api.py` 的 `ROUTE_PREFIX` 和 `/ping`、备份导出的 `meta.plugin`、
+  前端 `api.ts` 的 `PAGE_PLUGIN_NAME`、`model_card.py` 的字体投放目录、
+  `_conf_schema.json` 的 hint、`build_zip.ps1` 的 `$pluginName`（zip 顶层目录名）、
+  README / DEVELOPMENT / CHANGELOG、工作区 PRD 文档一并改为新名。
+- **新增 `rename_migration.py`**：`initialize()` 里在建库与 `reload_rules()` 之前做一次性搬迁。
+  数据目录按「目标文件不存在才复制」逐文件搬（`user_gateway.db` / `-wal` / `-shm` /
+  `avatars/` / `fonts/`），配置仅在 AstrBot 刚按 schema 默认值新建配置
+  （`first_deploy=True`）时把旧 `_config.json` 整体搬入。**旧文件全部保留**，便于回退；
+  **库文件名 `user_gateway.db` 保持不变**，否则搬迁后反而找不到数据。
+  刻意不 import `astrbot`，可脱离运行时直接跑自检。
+- 与 `moe_box` 的搬迁实现有一处关键差异：那边判据是「新目录不存在」，而本插件走
+  `StarTools.get_data_dir()`，核心 `ensure_dir` 会**自动创建**新目录，那个判据永远为假。
+  故改成逐文件判存在，既不覆盖改名后新产生的数据，也支持中断后重跑。
+- 新模块按仓库约束同时加入 `build_zip.ps1` 的 `$includeList` 与 `main.py` 的
+  `_reload_sibling_modules()` 热重载清单。
+- 规则备份导出文件名改为 `moe_permission_rules_<时间>.json`；导入只按
+  `meta.schema_version` 校验、不认 `meta.plugin`，旧备份仍可照常导入。
+
+### 升级注意
+
+**必须卸载旧插件再安装新包**（AstrBot 视为两个不同插件）。首次启动会自动搬迁旧数据与
+配置；如果之前已在控制台「导出规则」留了备份，也可以直接导入。
 
 ## v1.4.2（卡片字体支持往 data/fonts 丢文件，投放目录盖过插件自带）
 
@@ -14,7 +59,7 @@
 
 ### 修复
 
-- 字体查找顺序改成 **配置指定 → `data/plugin_data/astrbot_plugin_user_gateway/fonts/` →
+- 字体查找顺序改成 **配置指定 → `data/plugin_data/astrbot_plugin_moe_permission/fonts/` →
   共享 `data/fonts/` → 插件自带 `assets/fonts` → 系统字体**。
   投放目录排在自带之前是重点：随包那份只是「开箱有中文」的兜底，
   不该盖掉用户特意放进来的字体。目录里多个文件时按
@@ -1675,7 +1720,7 @@ AstrBot 的模型口径。本次按 model_panel 的做法重做：
 ### 3. 头像：后端抓取 + 缓存 + 更新
 
 - 新增 `avatar.py`：好友头像与**群头像**都由后端从腾讯 CDN 抓取并缓存到
-  `data/plugin_data/astrbot_plugin_user_gateway/avatars/`，按 `avatar_cache_days`
+  `data/plugin_data/astrbot_plugin_moe_permission/avatars/`，按 `avatar_cache_days`
   （默认 30 天）过期重取；抓取失败自动用过期缓存兜底（离线可用）。
 - 前端批量按当前页的 id 拉取（data URI，带在途去重），三级兜底：
   后端缓存 → 腾讯 CDN → 首字母色块。
@@ -1726,7 +1771,7 @@ v0.2.0 新增了三个顶层模块（`gate.py` / `quota.py` / `sync.py`）却忘
 
 ## v0.2.0（M1：LLM 权限内核、好友群同步、真实数据）
 
-需求与设计见工作区 `docs/astrbot_plugin_user_gateway_PRD.md`。
+需求与设计见工作区 `docs/astrbot_plugin_moe_permission_PRD.md`。
 
 ### 新增：LLM 闸门（本版核心）
 
@@ -1818,10 +1863,10 @@ v0.2.0 新增了三个顶层模块（`gate.py` / `quota.py` / `sync.py`）却忘
 
 ## v0.1.0（M0 骨架：元数据、存储层、控制台接口与前端工程）
 
-需求与设计见工作区文档 `docs/astrbot_plugin_user_gateway_PRD.md`。本次是首个可安装版本，
+需求与设计见工作区文档 `docs/astrbot_plugin_moe_permission_PRD.md`。本次是首个可安装版本，
 只做基础设施，**尚未接入 LLM 拦截**（那是 M1）。
 
-- 清掉 AstrBot `helloworld` 模板：`metadata.yaml` 落为 `astrbot_plugin_user_gateway` /
+- 清掉 AstrBot `helloworld` 模板：`metadata.yaml` 落为 `astrbot_plugin_moe_permission` /
   展示名「萌萌权限控制台」/ 作者 windExplorer / `astrbot_version: ">=4.22.0"` /
   `pages: permission-console`；新增 `_conf_schema.json`（17 项配置，含逐项 hint）。
 - `store.py`：SQLite（WAL）持久层，建 7 张表 —— `settings` / `friend_cache` / `group_cache` /
