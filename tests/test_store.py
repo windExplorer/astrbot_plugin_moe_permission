@@ -312,6 +312,27 @@ async def main() -> int:
         check(nm.get("88888") == "测试群", "群展示名 = 群名")
         check("77777" not in nm and "1" not in nm, "查不到的 id 不进结果（前端回退显示 id）")
 
+        # v1.5.2：同一个人 / 同一个群在不同 platform_id 下各有一份缓存时（换过 OneBot
+        # 适配器会换 id、或同时挂了两个机器人），列表必须按 QQ / 群号去重，
+        # 否则控制台（不分平台）会把同一个人显示成好几行。
+        await st.upsert_friends("aiocqhttp-2", [
+            {"user_id": "10001", "nickname": "小明（小号）", "remark": "同事"},
+        ])
+        dup = await st.list_friends()
+        check(dup["total"] == 2, f"跨平台重复的好友只算一次（实得 {dup['total']}）")
+        check(len([r for r in dup["rows"] if r["uin"] == "10001"]) == 1, "同一个 QQ 在列表里只有一行")
+        check(dup["rows"][0]["uin"] == "10001" and dup["rows"][0]["nickname"] == "小明（小号）",
+              f"取最近同步的那份资料（实得 {dup['rows'][0]['nickname']}）")
+        check((await st.list_friends(platform_id="aiocqhttp-2"))["total"] == 1, "指定平台时只列该平台的缓存")
+        check((await st.get_friend("10001"))["nickname"] == "小明（小号）", "get_friend 取最近同步的那份")
+
+        await st.upsert_groups("aiocqhttp-2", [
+            {"group_id": "88888", "group_name": "测试群", "member_count": 30, "max_member_count": 200, "owner": "10001"},
+        ])
+        gdup = await st.list_groups()
+        check(gdup["total"] == 2, f"跨平台重复的群只算一次（实得 {gdup['total']}）")
+        check(len([r for r in gdup["rows"] if r["group_id"] == "88888"]) == 1, "同一个群在列表里只有一行")
+
         print("\n[7] 超期清理与审计")
         await st.log_usage(ts=now - 400 * 86400, scope_type="user", scope_id="10001", status="ok")
         before = (await st.query_usage(limit=1))["total"]

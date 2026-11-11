@@ -1872,24 +1872,24 @@ class Store:
         return {"totals": totals, "series": series, "by_model": by_model}
 
     async def get_friend(self, uin: str, platform_id: Optional[str] = None) -> Optional[dict[str, Any]]:
-        """取单个好友缓存行。"""
+        """取单个好友缓存行（同一个人在多个平台下都有缓存时取最近同步的那行）。"""
         sql = "SELECT * FROM friend_cache WHERE uin = ?"
         args: list[Any] = [str(uin)]
         if platform_id:
             sql += " AND platform_id = ?"
             args.append(platform_id)
-        async with self._conn().execute(sql + " LIMIT 1", args) as cur:
+        async with self._conn().execute(sql + " ORDER BY updated_at DESC, rowid DESC LIMIT 1", args) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
 
     async def get_group(self, group_id: str, platform_id: Optional[str] = None) -> Optional[dict[str, Any]]:
-        """取单个群缓存行。"""
+        """取单个群缓存行（同一个群在多个平台下都有缓存时取最近同步的那行）。"""
         sql = "SELECT * FROM group_cache WHERE group_id = ?"
         args: list[Any] = [str(group_id)]
         if platform_id:
             sql += " AND platform_id = ?"
             args.append(platform_id)
-        async with self._conn().execute(sql + " LIMIT 1", args) as cur:
+        async with self._conn().execute(sql + " ORDER BY updated_at DESC, rowid DESC LIMIT 1", args) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
 
@@ -1949,14 +1949,27 @@ class Store:
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """好友列表（昵称/备注模糊搜索），返回 ``{total, rows}``。"""
+        """好友列表（昵称/备注模糊搜索），返回 ``{total, rows}``。
+
+        **按 QQ 去重**（v1.5.2）：同一个人可能在不同 ``platform_id`` 下各存一份
+        （换过 OneBot 适配器后 id 会变、或同时挂了两个机器人），而控制台列表
+        不分平台 —— 不去重就会把同一个人显示成好几行。这里按 ``uin`` 只保留
+        「最近一次同步」的那行（同一秒内按写入顺序取后写的那条）。
+        """
         where, args = self._cache_where(platform_id, keyword, ("uin", "nickname", "remark"))
+        dedup = (
+            "WITH d AS (SELECT platform_id, uin, nickname, remark, is_friend, updated_at, "
+            "ROW_NUMBER() OVER (PARTITION BY uin ORDER BY updated_at DESC, rowid DESC) AS __rn "
+            f"FROM friend_cache{where}) "
+        )
         db = self._conn()
-        async with db.execute(f"SELECT COUNT(*) AS c FROM friend_cache{where}", args) as cur:
+        async with db.execute(dedup + "SELECT COUNT(*) AS c FROM d WHERE __rn = 1", args) as cur:
             row = await cur.fetchone()
             total = int(row["c"]) if row else 0
         async with db.execute(
-            f"SELECT * FROM friend_cache{where} ORDER BY updated_at DESC, uin LIMIT ? OFFSET ?",
+            dedup
+            + "SELECT platform_id, uin, nickname, remark, is_friend, updated_at FROM d "
+            "WHERE __rn = 1 ORDER BY updated_at DESC, uin LIMIT ? OFFSET ?",
             [*args, int(limit), int(offset)],
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -1999,14 +2012,26 @@ class Store:
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """群列表（群名/群号模糊搜索），返回 ``{total, rows}``。"""
+        """群列表（群名/群号模糊搜索），返回 ``{total, rows}``。
+
+        **按群号去重**（v1.5.2，与 ``list_friends`` 同一个坑）：同一个群可能挂在
+        多个 ``platform_id`` 下，控制台列表不分平台，不去重就会重复出现。
+        """
         where, args = self._cache_where(platform_id, keyword, ("group_id", "name"))
+        dedup = (
+            "WITH d AS (SELECT platform_id, group_id, name, member_count, max_member_count, "
+            "owner, updated_at, ROW_NUMBER() OVER "
+            "(PARTITION BY group_id ORDER BY updated_at DESC, rowid DESC) AS __rn "
+            f"FROM group_cache{where}) "
+        )
         db = self._conn()
-        async with db.execute(f"SELECT COUNT(*) AS c FROM group_cache{where}", args) as cur:
+        async with db.execute(dedup + "SELECT COUNT(*) AS c FROM d WHERE __rn = 1", args) as cur:
             row = await cur.fetchone()
             total = int(row["c"]) if row else 0
         async with db.execute(
-            f"SELECT * FROM group_cache{where} ORDER BY updated_at DESC, group_id LIMIT ? OFFSET ?",
+            dedup
+            + "SELECT platform_id, group_id, name, member_count, max_member_count, owner, updated_at "
+            "FROM d WHERE __rn = 1 ORDER BY updated_at DESC, group_id LIMIT ? OFFSET ?",
             [*args, int(limit), int(offset)],
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
